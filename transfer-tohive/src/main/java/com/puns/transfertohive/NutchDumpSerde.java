@@ -68,6 +68,8 @@ public class NutchDumpSerde extends AbstractSerDe {
 	Object[] outputFields;
 	Text outputRowText;
 
+	private List<String> columnNames;
+
 	boolean alreadyLoggedNoMatch = false;
 	boolean alreadyLoggedPartialMatch = false;
 
@@ -90,14 +92,9 @@ public class NutchDumpSerde extends AbstractSerDe {
 				.getProperty(serdeConstants.LIST_COLUMNS);
 		String columnTypeProperty = tbl
 				.getProperty(serdeConstants.LIST_COLUMN_TYPES);
-		boolean inputRegexIgnoreCase = "true".equalsIgnoreCase(tbl
-				.getProperty("input.regex.case.insensitive"));
-
-		// output format string is not supported anymore, warn user of
-		// deprecation
 
 		// Parse the configuration parameters
-		List<String> columnNames = Arrays.asList(columnNameProperty.split(","));
+		columnNames = Arrays.asList(columnNameProperty.split(","));
 		columnTypes = TypeInfoUtils
 				.getTypeInfosFromTypeString(columnTypeProperty);
 		assert columnNames.size() == columnTypes.size();
@@ -193,6 +190,11 @@ public class NutchDumpSerde extends AbstractSerDe {
 		if (line.trim().isEmpty()) {
 			// TODO
 			return null;
+		}
+
+		// 对每个column 进行循环
+		for (String colName : this.columnNames) {
+			
 		}
 
 		// 1.1. 获取url index,必须存在
