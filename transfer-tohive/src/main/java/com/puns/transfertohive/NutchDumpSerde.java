@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -23,7 +24,6 @@ import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfoUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
-import org.datanucleus.store.rdbms.sql.method.StringEqualsIgnoreCaseMethod;
 
 import com.google.common.base.Splitter;
 import com.google.common.collect.Lists;
@@ -42,12 +42,19 @@ import com.google.common.collect.Lists;
  */
 public class NutchDumpSerde extends AbstractSerDe {
 
+	private static final String NUTCH_SPLIT_CONTENT = "Content::";
+	private static final String NUTCH_SPLIT_CRAWL_DATUM = "CrawlDatum::";
 	public static final Log LOG = LogFactory.getLog(NutchDumpSerde.class
 			.getName());
 	String line;
 	int urlIndex;
+	String strURL;
 	int datumIndex;
+	String strDatum;
 	int contentIndex;
+	String strContent;
+
+	private final static String NUTCH_SPLIT_URL = "URL:: ";
 
 	int numColumns;
 	String inputRegex;
@@ -65,6 +72,11 @@ public class NutchDumpSerde extends AbstractSerDe {
 	boolean alreadyLoggedPartialMatch = false;
 
 	private int counter = 0;
+
+	// private static final boolean[][] stats = { { true, false, },
+	// {},
+	// {},
+	// {}};
 
 	@Override
 	public void initialize(Configuration conf, Properties tbl)
@@ -146,7 +158,7 @@ public class NutchDumpSerde extends AbstractSerDe {
 			throw new SerDeException("Should exist : " + match + " in line: "
 					+ line);
 		}
-		return rtn + match.length();
+		return rtn;
 	}
 
 	/**
@@ -158,27 +170,79 @@ public class NutchDumpSerde extends AbstractSerDe {
 	 * @return
 	 */
 	private int getIndexAndOptional(String line, String match, int fromIndex) {
-		int rtn = line.indexOf(match, fromIndex);
-		return rtn < 0 ? rtn : rtn + match.length();
-
+		return line.indexOf(match, fromIndex);
 	}
 
 	@Override
 	public Object deserialize(Writable blob) throws SerDeException {
+		// 逻辑：
+		// 1.如果为空，----
+		// 2.Nutch很奇怪，数据dump格式是先URL::,然后有可能是"CrawlDatum::",也有可能是"Content::"
+		// 但是"CrawlDatum::"一定会有。
+		// 3.逻辑如下
+		// 3.1 取出URL::,如果找不到报错
+		// 3.2 取出CrawlDatum::,如果找不到报错
+		// 3.3 取出Content::，如果找不到，没事，如果找到了，和CrawlDatum比大小。然后决定取出顺序
+
+		if (LOG.isDebugEnabled()) {
+			LOG.debug(blob.toString());
+		}
+
 		line = blob.toString();
 		// return if line == empty
 		if (line.trim().isEmpty()) {
 			// TODO
 			return null;
 		}
-		// 1. 获取url index,必须存在
-		urlIndex = this.getIndexAndExist(line, "URL:: ", 0);
-		// 2.获取CrawlDatum::，必须存在
-		datumIndex = this.getIndexAndExist(line, "CrawlDatum::", urlIndex);
-		// 3.获取Content::，可存在可不存在，不存在证明抓取失败
-		contentIndex = this.getIndexAndOptional(line, "Content::", datumIndex);
 
-		
+		// 1.1. 获取url index,必须存在
+		urlIndex = this.getIndexAndExist(line, NUTCH_SPLIT_URL, 0);
+		// 1.2.获取CrawlDatum::，必须存在
+		datumIndex = this.getIndexAndExist(line, NUTCH_SPLIT_CRAWL_DATUM,
+				urlIndex); // 1.3.获取Content::，可存在可不存在，不存在证明抓取失败
+		contentIndex = this.getIndexAndOptional(line, NUTCH_SPLIT_CONTENT,
+				urlIndex);
+		if (contentIndex < 0) {
+			// 不存在content
+			strURL = line.substring(urlIndex + NUTCH_SPLIT_URL.length(),
+					datumIndex - 1);
+			strDatum = line.substring(datumIndex);
+			strContent = "";
+		} else {
+			if (contentIndex > datumIndex) {
+				// contentIndex在后
+				strURL = line.substring(urlIndex + NUTCH_SPLIT_URL.length(),
+						datumIndex - 1);
+				strDatum = line.substring(
+						datumIndex + NUTCH_SPLIT_CRAWL_DATUM.length(),
+						contentIndex - 1);
+				strContent = line.substring(contentIndex
+						+ NUTCH_SPLIT_CONTENT.length());
+			} else {
+				// contentIndex在前
+				strURL = line.substring(urlIndex + NUTCH_SPLIT_URL.length(),
+						contentIndex - 1);
+				strDatum = line.substring(datumIndex
+						+ NUTCH_SPLIT_CRAWL_DATUM.length());
+				strContent = line.substring(
+						contentIndex + NUTCH_SPLIT_CONTENT.length(),
+						datumIndex - 1);
+
+			}
+
+		}
+
+		// 对url trim
+		row.set(0, strURL.trim());
+		// 对datum做replace处理
+		row.set(1, strDatum.trim().replace('\n', '\001'));
+		// 对html 替换所有空格
+		row.set(2, strContent.trim().replaceAll("\r|\n|\r\n", ""));
+		if (LOG.isDebugEnabled()) {
+			LOG.debug(row);
+		}
+		LOG.info(counter++ + ":" + row.get(0));
+		LOG.info(row.get(2));
 		return row;
 	}
 
